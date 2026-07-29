@@ -1,0 +1,128 @@
+/********************************************************************
+ Description  : Sauvegarde différentielle de la base BD_ATLANTIS_SGI
+ Version      : 1.0
+********************************************************************/
+
+DECLARE @BackupPath NVARCHAR(256) = 'C:\Backups\AtlantisBackup\DIFF\';
+DECLARE @DBName NVARCHAR(128) = 'BD_ATLANTIS_SGI';
+DECLARE @FileName NVARCHAR(500);
+DECLARE @FileDate NVARCHAR(30);
+
+DECLARE @StartTime DATETIME;
+DECLARE @EndTime DATETIME;
+DECLARE @Duration INT;
+DECLARE @ErrorMessage NVARCHAR(MAX);
+
+DECLARE @LogId INT;
+
+--------------------------------------------------------
+-- Construction du nom du fichier
+--------------------------------------------------------
+
+SET @FileDate = FORMAT(GETDATE(),'dd-MM-yyyy_HH''H''mm''M''ss''S''');
+
+SET @FileName =
+@BackupPath +
+@DBName +
+'_' +
+@FileDate +
+'_Diff.bak';
+
+--------------------------------------------------------
+-- Heure de début
+--------------------------------------------------------
+
+SET @StartTime = GETDATE();
+
+--------------------------------------------------------
+-- Journalisation : début
+--------------------------------------------------------
+
+INSERT INTO Log_Database.dbo.BackupExecutionLog
+(
+    DatabaseName,
+    BackupType,
+    BackupFile,
+    StartTime,
+    Status
+)
+VALUES
+(
+    @DBName,
+    'DIFFERENTIAL',
+    @FileName,
+    @StartTime,
+    'RUNNING'
+);
+
+SET @LogId = SCOPE_IDENTITY();
+
+--------------------------------------------------------
+-- Début du traitement
+--------------------------------------------------------
+
+BEGIN TRY
+
+    PRINT 'Début de la sauvegarde : ' + CONVERT(VARCHAR,@StartTime,120);
+
+    BACKUP DATABASE @DBName
+    TO DISK=@FileName
+    WITH
+        DIFFERENTIAL,
+        INIT,
+        COMPRESSION,
+        CHECKSUM,
+        STATS=10;
+
+    ----------------------------------------------------
+    -- Vérification de la sauvegarde
+    ----------------------------------------------------
+
+    RESTORE VERIFYONLY
+    FROM DISK=@FileName;
+
+    ----------------------------------------------------
+    -- Fin
+    ----------------------------------------------------
+
+    SET @EndTime = GETDATE();
+
+    SET @Duration = DATEDIFF(SECOND,@StartTime,@EndTime);
+
+    UPDATE Log_Database.dbo.BackupExecutionLog
+    SET
+
+        EndTime=@EndTime,
+        DurationSeconds=@Duration,
+        Status='SUCCESS'
+
+    WHERE Id=@LogId;
+
+    PRINT 'Sauvegarde terminée avec succès.';
+    PRINT 'Durée : ' + CAST(@Duration AS VARCHAR) + ' secondes';
+
+END TRY
+
+BEGIN CATCH
+
+    SET @EndTime = GETDATE();
+
+    SET @Duration = DATEDIFF(SECOND,@StartTime,@EndTime);
+
+    SET @ErrorMessage = ERROR_MESSAGE();
+
+    UPDATE Log_Database.dbo.BackupExecutionLog
+    SET
+
+        EndTime=@EndTime,
+        DurationSeconds=@Duration,
+        Status='FAILED',
+        ErrorMessage=@ErrorMessage
+
+    WHERE Id=@LogId;
+
+    PRINT 'Erreur : ' + @ErrorMessage;
+
+    THROW;
+
+END CATCH;
