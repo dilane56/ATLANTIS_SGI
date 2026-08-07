@@ -26,7 +26,7 @@ SET @FileName =
 @DBName +
 '_' +
 @FileDate +
-'_LOG.bak';
+'_LOG.trn';
 
 --------------------------------------------------------
 -- Heure de début
