@@ -3,6 +3,17 @@
 Tests à réaliser **sur une instance de test** avant la mise en production des scripts du dépôt.
 Pour chaque test : suivre les étapes, comparer au résultat attendu, cocher la case et noter les écarts dans la colonne « Remarques » du récapitulatif final.
 
+Légende : ☐ à faire · ☑ réussi · ☒ échec · ⚠ à reprendre · — sans objet
+
+## Suivi d'avancement
+
+| Date | Tests | Résultat | Commentaire |
+|------|-------|----------|-------------|
+| 29/09/2026 | I1, I2 | ☑ | `01_Log_Database.sql` exécuté deux fois, après suppression manuelle de l'ancienne base `Log_Database` |
+| 29/09/2026 | I3 | — | Sans objet : `Log_Database` n'a jamais été utilisée en production, il n'y a pas d'historique à mettre à niveau |
+
+**Prochain test : I4.**
+
 ---
 
 ## 0. Préparation de l'environnement de test
@@ -29,9 +40,9 @@ Pour chaque test : suivre les étapes, comparer au résultat attendu, cocher la 
 
 | ID | Test | Étapes | Résultat attendu | OK |
 |----|------|--------|------------------|----|
-| I1 | Création de la journalisation | Exécuter `01_Log_Database.sql` sur une instance sans `Log_Database` | Base créée en mode SIMPLE, tables `BackupExecutionLog` et `RestoreExecutionLog` créées, index créé | ☐ |
-| I2 | Ré-exécution | Exécuter `01_Log_Database.sql` une 2ᵉ fois | Aucune erreur, aucune donnée perdue | ☐ |
-| I3 | Mise à niveau d'une table existante | Sur une instance qui possède l'ancienne `BackupExecutionLog` (avec des lignes), exécuter `01_Log_Database.sql` | Colonnes `ServerName`, `BackupSizeMB`, `CompressedSizeMB`, `ErrorNumber`, `PurgeInfo` ajoutées ; `BackupType` fait au moins 20 caractères ; anciennes lignes intactes | ☐ |
+| I1 | Création de la journalisation | Exécuter `01_Log_Database.sql` sur une instance sans `Log_Database` | Base créée en mode SIMPLE, tables `BackupExecutionLog` et `RestoreExecutionLog` créées, index créé | ☑ |
+| I2 | Ré-exécution | Exécuter `01_Log_Database.sql` une 2ᵉ fois | Aucune erreur, aucune donnée perdue | ☑ |
+| I3 | Mise à niveau d'une table existante | Sans objet : `Log_Database` n'a jamais été utilisée en production, `01_Log_Database.sql` y fera une création (cas couvert par I1) | — | — |
 | I4 | Procédure | Exécuter `02_usp_BackupDatabase.sql` deux fois | Procédure créée puis remplacée sans erreur (`CREATE OR ALTER`) | ☐ |
 | I5 | Jobs | Renseigner `@OperatorEmail` / `@MailProfile` et les noms des bases Sage dans `03_Jobs_SQL_Agent.sql`, l'exécuter | Opérateur `DBA_ATLANTIS` créé, **8 jobs** créés (Atlantis FULL/DIFF/LOG, Sage compta FULL/DIFF/LOG, Sage paie FULL/DIFF), message « Profil Database Mail associé », commandes de lancement des 3 jobs FULL affichées | ☐ |
 | I6 | Ré-exécution des jobs | Exécuter `03_Jobs_SQL_Agent.sql` une 2ᵉ fois | Jobs supprimés puis recréés, pas de doublon dans `msdb.dbo.sysjobs` ni `msdb.dbo.sysschedules` | ☐ |
@@ -40,6 +51,14 @@ Pour chaque test : suivre les étapes, comparer au résultat attendu, cocher la 
 | I9 | Base introuvable | Laisser `<NOM_BASE_SAGE_PAIE>` non renseigné, exécuter `03` | Avertissement « Base "<NOM_BASE_SAGE_PAIE>" introuvable » pour les jobs FULL et DIFF de Sage paie ; les autres jobs sont créés normalement | ☐ |
 | I10 | Sage paie en mode FULL | Mettre la base Sage paie *de test* en mode FULL, exécuter `03` | Avertissement « … est en mode FULL sans sauvegarde LOG » | ☐ |
 | I11 | Job LOG sur base en SIMPLE | Mettre la base Sage compta *de test* en mode SIMPLE, exécuter `03`, la remettre en FULL | Avertissement « … est en mode SIMPLE alors qu'un job LOG est prévu » | ☐ |
+
+Contrôle de I1 / I2 :
+```sql
+SELECT name, recovery_model_desc FROM sys.databases WHERE name = 'Log_Database';   -- SIMPLE
+SELECT name FROM Log_Database.sys.tables;                                           -- BackupExecutionLog, RestoreExecutionLog
+SELECT name FROM Log_Database.sys.indexes
+WHERE object_id = OBJECT_ID('Log_Database.dbo.BackupExecutionLog') AND name IS NOT NULL;  -- PK + IX_BackupExecutionLog_Database_StartTime
+```
 
 Vérification des plannings (I5) :
 ```sql
@@ -245,7 +264,7 @@ Chaque test doit remonter une erreur, afficher l'étape en échec et produire un
 | Section | Tests | OK | KO | Remarques |
 |---------|-------|----|----|-----------|
 | 0. Préparation | P1–P5 | | | |
-| 1. Installation | I1–I11 | | | |
+| 1. Installation | I1–I11 | 2 | | I1, I2 réussis ; I3 sans objet (Log_Database jamais utilisée en production) |
 | 2. Sauvegardes nominales | S1–S7 | | | |
 | 3. Sauvegardes en erreur | E1–E10 | | | |
 | 4. Purge | R1–R6 | | | |
