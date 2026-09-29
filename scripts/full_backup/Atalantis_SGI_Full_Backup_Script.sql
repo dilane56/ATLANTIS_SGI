@@ -41,30 +41,37 @@ SET @FileName = @BackupPath + @DBName + '_' + @FileDate + '_FULL.bak';
 SET @StartTime = GETDATE();
 
 -- Journalisation : début
-INSERT INTO Log_Database.dbo.BackupExecutionLog
-(
-    DatabaseName,
-    BackupType,
-    BackupFile,
-    StartTime,
-    Status
-)
-VALUES
-(
-    @DBName,
-    @BackupType,
-    @FileName,
-    @StartTime,
-    'RUNNING'
-);
+-- La journalisation ne doit jamais empêcher la sauvegarde :
+-- en cas d'échec, on continue sans log (@LogId reste NULL).
+BEGIN TRY
+    INSERT INTO Log_Database.dbo.BackupExecutionLog
+    (
+        DatabaseName,
+        BackupType,
+        BackupFile,
+        StartTime,
+        Status
+    )
+    VALUES
+    (
+        @DBName,
+        @BackupType,
+        @FileName,
+        @StartTime,
+        'RUNNING'
+    );
 
-SET @LogId = SCOPE_IDENTITY();
+    SET @LogId = SCOPE_IDENTITY();
+END TRY
+BEGIN CATCH
+    PRINT 'Avertissement : journalisation indisponible - ' + ERROR_MESSAGE();
+END CATCH;
 
 BEGIN TRY
 
     PRINT 'Début de la sauvegarde : ' + CONVERT(VARCHAR, @StartTime, 120);
 
-   
+
     BACKUP DATABASE @DBName
     TO DISK = @FileName
     WITH
@@ -80,12 +87,20 @@ BEGIN TRY
     SET @EndTime = GETDATE();
     SET @Duration = DATEDIFF(SECOND, @StartTime, @EndTime);
 
-    UPDATE Log_Database.dbo.BackupExecutionLog
-    SET
-        EndTime = @EndTime,
-        DurationSeconds = @Duration,
-        Status = 'SUCCESS'
-    WHERE Id = @LogId;
+    IF @LogId IS NOT NULL
+    BEGIN
+        BEGIN TRY
+            UPDATE Log_Database.dbo.BackupExecutionLog
+            SET
+                EndTime = @EndTime,
+                DurationSeconds = @Duration,
+                Status = 'SUCCESS'
+            WHERE Id = @LogId;
+        END TRY
+        BEGIN CATCH
+            PRINT 'Avertissement : mise à jour du log impossible - ' + ERROR_MESSAGE();
+        END CATCH;
+    END;
 
     PRINT 'Sauvegarde terminée avec succès.';
     PRINT 'Durée : ' + CAST(@Duration AS VARCHAR) + ' secondes';
@@ -98,14 +113,21 @@ BEGIN CATCH
     SET @Duration = DATEDIFF(SECOND, @StartTime, @EndTime);
     SET @ErrorMessage = ERROR_MESSAGE();
 
-    -- Correction du nom de la table avec le schéma complet au cas où
-    UPDATE Log_Database.dbo.BackupExecutionLog
-    SET
-        EndTime = @EndTime,
-        DurationSeconds = @Duration,
-        Status = 'FAILED',
-        ErrorMessage = @ErrorMessage
-    WHERE Id = @LogId;
+    IF @LogId IS NOT NULL
+    BEGIN
+        BEGIN TRY
+            UPDATE Log_Database.dbo.BackupExecutionLog
+            SET
+                EndTime = @EndTime,
+                DurationSeconds = @Duration,
+                Status = 'FAILED',
+                ErrorMessage = @ErrorMessage
+            WHERE Id = @LogId;
+        END TRY
+        BEGIN CATCH
+            PRINT 'Avertissement : mise à jour du log impossible - ' + ERROR_MESSAGE();
+        END CATCH;
+    END;
 
     PRINT 'Erreur : ' + @ErrorMessage;
 
