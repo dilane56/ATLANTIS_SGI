@@ -10,17 +10,17 @@ GO
 -- PARAMÈTRES
 -- =====================================================
 
-DECLARE @DatabaseName NVARCHAR(128) = 'cliniquedb';
-DECLARE @BackupFilePathFULL NVARCHAR(500) = 'C:\Backups\CliniqueBackup\cliniquedb_FULL.bak';
+DECLARE @DatabaseName NVARCHAR(128) = 'BD_ATLANTIS_SGI';
+DECLARE @BackupFilePathFULL NVARCHAR(500) = 'C:\Backups\AtlantisBackup\FULL\BD_ATLANTIS_SGI_20260927_010000_FULL.bak';
 -- NULL si aucune différentielle n'est à appliquer
-DECLARE @BackupFilePathDIFF NVARCHAR(500) = 'C:\Backups\CliniqueBackup\cliniquedb_DIFF.bak';
+DECLARE @BackupFilePathDIFF NVARCHAR(500) = 'C:\Backups\AtlantisBackup\DIFF\BD_ATLANTIS_SGI_20260929_010000_DIFF.bak';
 
 -- Journaux à appliquer, DANS L'ORDRE chronologique (voir la liste plus bas).
 -- Avec @StopAt, lister les journaux jusqu'à celui qui contient @StopAt inclus.
 DECLARE @LogFiles TABLE (Ordre INT IDENTITY(1,1) PRIMARY KEY, FilePath NVARCHAR(500));
 INSERT INTO @LogFiles (FilePath) VALUES
-    ('C:\Backups\CliniqueBackup\cliniquedb_LOG1.trn'),
-    ('C:\Backups\CliniqueBackup\cliniquedb_LOG_dernier.trn');
+    ('C:\Backups\AtlantisBackup\LOG\BD_ATLANTIS_SGI_20260929_011500_LOG.trn'),
+    ('C:\Backups\AtlantisBackup\LOG\BD_ATLANTIS_SGI_20260929_013000_LOG.trn');
 
 -- Point dans le temps de la restauration. NULL = appliquer les journaux en entier.
 DECLARE @StopAt DATETIME = NULL;          -- ex. '2026-09-29 14:30:00'
@@ -28,7 +28,7 @@ DECLARE @StopAt DATETIME = NULL;          -- ex. '2026-09-29 14:30:00'
 -- Sauvegarde de fin de journal (tail-log) avant d'écraser une base existante :
 -- conserve les transactions postérieures à la dernière sauvegarde LOG.
 DECLARE @TailLogBackup BIT = 1;
-DECLARE @TailLogPath NVARCHAR(256) = 'C:\Backups\TailLog\';
+DECLARE @TailLogPath NVARCHAR(256) = 'C:\Backups\AtlantisBackup\TAILLOG\';
 
 -- Emplacement des fichiers restaurés (WITH MOVE). NULL = chemins d'origine de la sauvegarde.
 -- À renseigner pour restaurer sous un autre nom ou sur un autre serveur,
@@ -54,6 +54,9 @@ DECLARE @Etape NVARCHAR(200);
 DECLARE @EtatInitial NVARCHAR(60);
 DECLARE @EtatActuel NVARCHAR(60);
 DECLARE @RestoreStarted BIT = 0;
+DECLARE @RestoreLogId INT;
+DECLARE @ErrorNumber INT;
+DECLARE @ErrorMessage NVARCHAR(4000);
 
 DECLARE @FileList TABLE
 (
@@ -81,6 +84,24 @@ PRINT 'Journaux (LOG): ' + CAST(@NbLogs AS NVARCHAR(10)) + ' fichier(s)';
 PRINT 'Point dans le temps: ' + ISNULL(CONVERT(NVARCHAR(20), @StopAt, 120), '(fin des journaux)');
 PRINT '───────────────────────────────────────────────────────────';
 PRINT '';
+
+-- Journalisation : début (ne doit jamais empêcher la restauration)
+BEGIN TRY
+    INSERT INTO Log_Database.dbo.RestoreExecutionLog (DatabaseName, RestoreType, BackupFiles, StopAt, StartTime, Status)
+    SELECT
+        @DatabaseName,
+        CASE WHEN @BackupFilePathDIFF IS NULL THEN 'FULL+LOG' ELSE 'FULL+DIFF+LOG' END,
+        @BackupFilePathFULL
+            + ISNULL(' | ' + @BackupFilePathDIFF, '')
+            + ISNULL(' | ' + (SELECT STRING_AGG(CAST(FilePath AS NVARCHAR(MAX)), ' | ') WITHIN GROUP (ORDER BY Ordre) FROM @LogFiles), ''),
+        @StopAt,
+        @StartTime,
+        'RUNNING';
+    SET @RestoreLogId = SCOPE_IDENTITY();
+END TRY
+BEGIN CATCH
+    PRINT 'Avertissement : journalisation indisponible - ' + ERROR_MESSAGE();
+END CATCH;
 
 BEGIN TRY
 
@@ -308,6 +329,21 @@ BEGIN TRY
         PRINT '  ✓ Aucun utilisateur orphelin';
     PRINT '';
 
+    IF @RestoreLogId IS NOT NULL
+    BEGIN
+        BEGIN TRY
+            UPDATE Log_Database.dbo.RestoreExecutionLog
+            SET EndTime = GETDATE(),
+                DurationSeconds = DATEDIFF(SECOND, @StartTime, GETDATE()),
+                Status = 'SUCCESS',
+                TailLogFile = @TailLogFile
+            WHERE Id = @RestoreLogId;
+        END TRY
+        BEGIN CATCH
+            PRINT 'Avertissement : mise à jour du log impossible - ' + ERROR_MESSAGE();
+        END CATCH;
+    END
+
     PRINT '═══════════════════════════════════════════════════════════';
     PRINT '✓ RESTAURATION RÉUSSIE! Durée : ' + CAST(DATEDIFF(SECOND, @StartTime, GETDATE()) AS NVARCHAR(10)) + ' seconde(s)';
     IF @TailLogFile IS NOT NULL
@@ -316,6 +352,9 @@ BEGIN TRY
 
 END TRY
 BEGIN CATCH
+    SET @ErrorNumber = ERROR_NUMBER();
+    SET @ErrorMessage = ERROR_MESSAGE();
+
     PRINT '';
     PRINT '═══════════════════════════════════════════════════════════';
     PRINT '✗ ERREUR LORS DE LA RESTAURATION!';
@@ -362,6 +401,24 @@ BEGIN CATCH
 
     IF @TailLogFile IS NOT NULL
         PRINT 'Sauvegarde de fin de journal : ' + @TailLogFile;
+
+    IF @RestoreLogId IS NOT NULL
+    BEGIN
+        BEGIN TRY
+            UPDATE Log_Database.dbo.RestoreExecutionLog
+            SET EndTime = GETDATE(),
+                DurationSeconds = DATEDIFF(SECOND, @StartTime, GETDATE()),
+                Status = 'FAILED',
+                TailLogFile = @TailLogFile,
+                FailedStep = @Etape,
+                ErrorNumber = @ErrorNumber,
+                ErrorMessage = @ErrorMessage
+            WHERE Id = @RestoreLogId;
+        END TRY
+        BEGIN CATCH
+            PRINT 'Avertissement : mise à jour du log impossible - ' + ERROR_MESSAGE();
+        END CATCH;
+    END
 
     -- Relancer l'erreur pour que l'appelant (ex. job SQL Agent) voie l'échec
     THROW;

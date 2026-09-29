@@ -1,0 +1,7 @@
+ Politique de rétention
+Sauvegarde Conservation Conservation (en heure)
+LOG (Atlantis & Sage compta) 7 jours 168 heures
+DIFF (Atlantis & Sage compta) 15 jours 360 heures
+FULL hebdo(Atlantis & Sage compta) 23 jours 552 heures
+DIFF (Sage paie) 24 jours 600 heures
+FULL mensuelle (Sage paie) 32 jours 768 heures

@@ -10,14 +10,13 @@ GO
 -- PARAMÈTRES
 -- =====================================================
 
-DECLARE @DatabaseName NVARCHAR(128) = 'stage_management_db';
-DECLARE @BackupFilePath NVARCHAR(500) = 'C:\Backups\StageManagementBackup\stage_management_db_28-07-2026_10H36M35S_FULL.bak';
---exemple 'C:\Backups\StageManagementBackup\stage_management_db_28-07-2026_10H36M35S_FULL.bak'
+DECLARE @DatabaseName NVARCHAR(128) = 'BD_ATLANTIS_SGI';
+DECLARE @BackupFilePath NVARCHAR(500) = 'C:\Backups\AtlantisBackup\FULL\BD_ATLANTIS_SGI_20260927_010000_FULL.bak';
 
 -- Sauvegarde de fin de journal (tail-log) avant d'écraser une base existante :
 -- conserve les transactions postérieures à la dernière sauvegarde LOG.
 DECLARE @TailLogBackup BIT = 1;
-DECLARE @TailLogPath NVARCHAR(256) = 'C:\Backups\TailLog\';
+DECLARE @TailLogPath NVARCHAR(256) = 'C:\Backups\AtlantisBackup\TAILLOG\';
 
 -- Emplacement des fichiers restaurés (WITH MOVE). NULL = chemins d'origine de la sauvegarde.
 -- À renseigner pour restaurer sous un autre nom ou sur un autre serveur,
@@ -40,6 +39,9 @@ DECLARE @Etape NVARCHAR(100);
 DECLARE @EtatInitial NVARCHAR(60);
 DECLARE @EtatActuel NVARCHAR(60);
 DECLARE @RestoreStarted BIT = 0;
+DECLARE @RestoreLogId INT;
+DECLARE @ErrorNumber INT;
+DECLARE @ErrorMessage NVARCHAR(4000);
 
 DECLARE @FileList TABLE
 (
@@ -62,6 +64,16 @@ PRINT 'Base: ' + @DatabaseName;
 PRINT 'Fichier: ' + @BackupFilePath;
 PRINT '───────────────────────────────────────────────────────────';
 PRINT '';
+
+-- Journalisation : début (ne doit jamais empêcher la restauration)
+BEGIN TRY
+    INSERT INTO Log_Database.dbo.RestoreExecutionLog (DatabaseName, RestoreType, BackupFiles, StartTime, Status)
+    VALUES (@DatabaseName, 'FULL', @BackupFilePath, @StartTime, 'RUNNING');
+    SET @RestoreLogId = SCOPE_IDENTITY();
+END TRY
+BEGIN CATCH
+    PRINT 'Avertissement : journalisation indisponible - ' + ERROR_MESSAGE();
+END CATCH;
 
 BEGIN TRY
 
@@ -226,6 +238,21 @@ BEGIN TRY
         PRINT '✓ Aucun utilisateur orphelin';
     PRINT '';
 
+    IF @RestoreLogId IS NOT NULL
+    BEGIN
+        BEGIN TRY
+            UPDATE Log_Database.dbo.RestoreExecutionLog
+            SET EndTime = GETDATE(),
+                DurationSeconds = DATEDIFF(SECOND, @StartTime, GETDATE()),
+                Status = 'SUCCESS',
+                TailLogFile = @TailLogFile
+            WHERE Id = @RestoreLogId;
+        END TRY
+        BEGIN CATCH
+            PRINT 'Avertissement : mise à jour du log impossible - ' + ERROR_MESSAGE();
+        END CATCH;
+    END
+
     PRINT '═══════════════════════════════════════════════════════════';
     PRINT '✓ RESTAURATION RÉUSSIE! Durée : ' + CAST(DATEDIFF(SECOND, @StartTime, GETDATE()) AS NVARCHAR(10)) + ' seconde(s)';
     IF @TailLogFile IS NOT NULL
@@ -234,6 +261,9 @@ BEGIN TRY
 
 END TRY
 BEGIN CATCH
+    SET @ErrorNumber = ERROR_NUMBER();
+    SET @ErrorMessage = ERROR_MESSAGE();
+
     PRINT '';
     PRINT '═══════════════════════════════════════════════════════════';
     PRINT '✗ ERREUR LORS DE LA RESTAURATION!';
@@ -277,6 +307,24 @@ BEGIN CATCH
 
     IF @TailLogFile IS NOT NULL
         PRINT 'Sauvegarde de fin de journal : ' + @TailLogFile;
+
+    IF @RestoreLogId IS NOT NULL
+    BEGIN
+        BEGIN TRY
+            UPDATE Log_Database.dbo.RestoreExecutionLog
+            SET EndTime = GETDATE(),
+                DurationSeconds = DATEDIFF(SECOND, @StartTime, GETDATE()),
+                Status = 'FAILED',
+                TailLogFile = @TailLogFile,
+                FailedStep = @Etape,
+                ErrorNumber = @ErrorNumber,
+                ErrorMessage = @ErrorMessage
+            WHERE Id = @RestoreLogId;
+        END TRY
+        BEGIN CATCH
+            PRINT 'Avertissement : mise à jour du log impossible - ' + ERROR_MESSAGE();
+        END CATCH;
+    END
 
     -- Relancer l'erreur pour que l'appelant (ex. job SQL Agent) voie l'échec
     THROW;

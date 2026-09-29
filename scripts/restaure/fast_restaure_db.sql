@@ -1,9 +1,13 @@
+-- Restauration RAPIDE d'une FULL (poste de développement / test).
+-- Pas de tail-log, pas de WITH MOVE, pas de journalisation :
+-- en production, utiliser full_bd_restaure_script.sql.
+
 --Bascule vers la base master (nécessaire pour les opérations système)
 USE [master];
 GO
 -- Declaration des variables
-DECLARE @DatabaseName NVARCHAR(128) = 'nom de la bd';
-DECLARE @BackupFilePath NVARCHAR(500) = 'bd_src_path';
+DECLARE @DatabaseName NVARCHAR(128) = 'BD_ATLANTIS_SGI';
+DECLARE @BackupFilePath NVARCHAR(500) = 'C:\Backups\AtlantisBackup\FULL\BD_ATLANTIS_SGI_20260927_010000_FULL.bak';
 DECLARE @SQL NVARCHAR(MAX);
 
 BEGIN TRY
