@@ -86,18 +86,24 @@ PRINT '────────────────────────�
 PRINT '';
 
 -- Journalisation : début (ne doit jamais empêcher la restauration)
+-- Via sp_executesql : si Log_Database est absente (ex. serveur de secours),
+-- l'erreur reste interceptable par le CATCH au lieu d'interrompre le script.
+DECLARE @LogRestoreType NVARCHAR(20) = CASE WHEN @BackupFilePathDIFF IS NULL THEN 'FULL+LOG' ELSE 'FULL+DIFF+LOG' END;
+DECLARE @LogBackupFiles NVARCHAR(MAX);
+
+SELECT @LogBackupFiles = @BackupFilePathFULL
+    + ISNULL(' | ' + @BackupFilePathDIFF, '')
+    + ISNULL(' | ' + STRING_AGG(CAST(FilePath AS NVARCHAR(MAX)), ' | ') WITHIN GROUP (ORDER BY Ordre), '')
+FROM @LogFiles;
+
 BEGIN TRY
-    INSERT INTO Log_Database.dbo.RestoreExecutionLog (DatabaseName, RestoreType, BackupFiles, StopAt, StartTime, Status)
-    SELECT
-        @DatabaseName,
-        CASE WHEN @BackupFilePathDIFF IS NULL THEN 'FULL+LOG' ELSE 'FULL+DIFF+LOG' END,
-        @BackupFilePathFULL
-            + ISNULL(' | ' + @BackupFilePathDIFF, '')
-            + ISNULL(' | ' + (SELECT STRING_AGG(CAST(FilePath AS NVARCHAR(MAX)), ' | ') WITHIN GROUP (ORDER BY Ordre) FROM @LogFiles), ''),
-        @StopAt,
-        @StartTime,
-        'RUNNING';
-    SET @RestoreLogId = SCOPE_IDENTITY();
+    EXEC sp_executesql
+        N'INSERT INTO Log_Database.dbo.RestoreExecutionLog (DatabaseName, RestoreType, BackupFiles, StopAt, StartTime, Status)
+          VALUES (@DatabaseName, @RestoreType, @BackupFiles, @StopAt, @StartTime, ''RUNNING'');
+          SET @RestoreLogId = SCOPE_IDENTITY();',
+        N'@DatabaseName NVARCHAR(128), @RestoreType NVARCHAR(20), @BackupFiles NVARCHAR(MAX), @StopAt DATETIME, @StartTime DATETIME, @RestoreLogId INT OUTPUT',
+        @DatabaseName = @DatabaseName, @RestoreType = @LogRestoreType, @BackupFiles = @LogBackupFiles,
+        @StopAt = @StopAt, @StartTime = @StartTime, @RestoreLogId = @RestoreLogId OUTPUT;
 END TRY
 BEGIN CATCH
     PRINT 'Avertissement : journalisation indisponible - ' + ERROR_MESSAGE();
@@ -332,12 +338,15 @@ BEGIN TRY
     IF @RestoreLogId IS NOT NULL
     BEGIN
         BEGIN TRY
-            UPDATE Log_Database.dbo.RestoreExecutionLog
-            SET EndTime = GETDATE(),
-                DurationSeconds = DATEDIFF(SECOND, @StartTime, GETDATE()),
-                Status = 'SUCCESS',
-                TailLogFile = @TailLogFile
-            WHERE Id = @RestoreLogId;
+            EXEC sp_executesql
+                N'UPDATE Log_Database.dbo.RestoreExecutionLog
+                  SET EndTime = GETDATE(),
+                      DurationSeconds = DATEDIFF(SECOND, @StartTime, GETDATE()),
+                      Status = ''SUCCESS'',
+                      TailLogFile = @TailLogFile
+                  WHERE Id = @RestoreLogId;',
+                N'@StartTime DATETIME, @TailLogFile NVARCHAR(500), @RestoreLogId INT',
+                @StartTime = @StartTime, @TailLogFile = @TailLogFile, @RestoreLogId = @RestoreLogId;
         END TRY
         BEGIN CATCH
             PRINT 'Avertissement : mise à jour du log impossible - ' + ERROR_MESSAGE();
@@ -405,15 +414,19 @@ BEGIN CATCH
     IF @RestoreLogId IS NOT NULL
     BEGIN
         BEGIN TRY
-            UPDATE Log_Database.dbo.RestoreExecutionLog
-            SET EndTime = GETDATE(),
-                DurationSeconds = DATEDIFF(SECOND, @StartTime, GETDATE()),
-                Status = 'FAILED',
-                TailLogFile = @TailLogFile,
-                FailedStep = @Etape,
-                ErrorNumber = @ErrorNumber,
-                ErrorMessage = @ErrorMessage
-            WHERE Id = @RestoreLogId;
+            EXEC sp_executesql
+                N'UPDATE Log_Database.dbo.RestoreExecutionLog
+                  SET EndTime = GETDATE(),
+                      DurationSeconds = DATEDIFF(SECOND, @StartTime, GETDATE()),
+                      Status = ''FAILED'',
+                      TailLogFile = @TailLogFile,
+                      FailedStep = @Etape,
+                      ErrorNumber = @ErrorNumber,
+                      ErrorMessage = @ErrorMessage
+                  WHERE Id = @RestoreLogId;',
+                N'@StartTime DATETIME, @TailLogFile NVARCHAR(500), @Etape NVARCHAR(200), @ErrorNumber INT, @ErrorMessage NVARCHAR(4000), @RestoreLogId INT',
+                @StartTime = @StartTime, @TailLogFile = @TailLogFile, @Etape = @Etape,
+                @ErrorNumber = @ErrorNumber, @ErrorMessage = @ErrorMessage, @RestoreLogId = @RestoreLogId;
         END TRY
         BEGIN CATCH
             PRINT 'Avertissement : mise à jour du log impossible - ' + ERROR_MESSAGE();

@@ -90,7 +90,7 @@ Chaque test doit se terminer par une **erreur remontée** (message rouge dans SS
 | E7 | LOG sans FULL | Base FULL jamais sauvegardée (recréer `BD_TEST_SAUVEGARDE`) : `@BackupType = 'LOG'` | Erreur 50004 « Aucune sauvegarde FULL n'a initialisé la chaîne » | ☐ |
 | E8 | Chemin inaccessible | `@BackupRoot = N'Z:\Inexistant\'` (lecteur absent) | Erreur (xp_create_subdir ou BACKUP) ; ligne `FAILED` | ☐ |
 | E9 | Échec de la journalisation | Créer un déclencheur qui refuse l'insertion (ci-dessous), lancer une FULL, puis supprimer le déclencheur | Message « Avertissement : journalisation indisponible » ; **la sauvegarde est réalisée** (fichier présent) ; aucune erreur remontée | ☐ |
-| E10 | Table de log absente (limite connue) | Renommer la table : `EXEC Log_Database.sys.sp_rename 'dbo.BackupExecutionLog', 'BackupExecutionLog_tmp';`, lancer une FULL, puis renommer à l'inverse | **À observer** : une table absente provoque une erreur de résolution de nom qu'un TRY/CATCH du même niveau ne peut pas intercepter. Si la sauvegarde n'est pas réalisée, le signaler pour correction (encapsulation de l'INSERT en SQL dynamique) | ☐ |
+| E10 | Table de log absente | Renommer la table : `EXEC Log_Database.sys.sp_rename 'dbo.BackupExecutionLog', 'BackupExecutionLog_tmp';`, lancer une FULL, puis renommer à l'inverse | Message « Avertissement : journalisation indisponible - Invalid object name… » ; **la sauvegarde est réalisée** (fichier présent) ; aucune erreur remontée | ☐ |
 
 ```sql
 -- E9 : simulation d'une panne d'écriture dans le log
@@ -199,6 +199,7 @@ Chaque test doit remonter une erreur, afficher l'étape en échec et produire un
 | T16 | Journaux dans le désordre | Lister deux `.trn` dans l'ordre inverse | Erreur 4305 (journal trop récent) à l'ÉTAPE 6 | ☐ |
 | T17 | Remise en service automatique | `@TailLogBackup = 1` avec `@TailLogPath` vers un dossier existant mais **en lecture seule** pour le compte de service : la base passe en SINGLE_USER puis le BACKUP LOG échoue | Échec à l'ÉTAPE 2 ; la base d'origine reste intacte, ONLINE et **remise en MULTI_USER** (`SELECT user_access_desc FROM sys.databases`) | ☐ |
 | T18 | Échec signalé à SQL Agent | Créer un job temporaire qui exécute un script de restauration voué à l'échec (T12) | Le job est marqué **en échec** (le `THROW` final remonte l'erreur) | ☐ |
+| T19 | Serveur sans Log_Database | Sur une instance **sans** `Log_Database` (serveur de secours), lancer `full_bd_restaure_script.sql` | Avertissement « journalisation indisponible » ; **la restauration est réalisée** | ☐ |
 
 ---
 
@@ -230,7 +231,7 @@ Chaque test doit remonter une erreur, afficher l'étape en échec et produire un
 | 3. Sauvegardes en erreur | E1–E10 | | | |
 | 4. Purge | R1–R6 | | | |
 | 5. Jobs et alertes | J1–J6 | | | |
-| 6. Restauration | T1–T18 | | | |
+| 6. Restauration | T1–T19 | | | |
 | 7. Supervision | M1–M2 | | | |
 | 8. Répétition générale | G1–G4 | | | |
 

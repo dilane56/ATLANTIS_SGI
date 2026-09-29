@@ -85,13 +85,19 @@ BEGIN
     --------------------------------------------------------
     -- Journalisation : début
     -- (ne doit jamais empêcher la sauvegarde)
+    -- Les accès à la table de log passent par sp_executesql : si la
+    -- table est absente, l'erreur de résolution de nom survient dans
+    -- un niveau inférieur et reste interceptable par le CATCH.
     --------------------------------------------------------
 
     BEGIN TRY
-        INSERT INTO dbo.BackupExecutionLog (DatabaseName, BackupType, BackupFile, StartTime, Status)
-        VALUES (@DBName, @LogBackupType, @FileName, @StartTime, 'RUNNING');
-
-        SET @LogId = SCOPE_IDENTITY();
+        EXEC sp_executesql
+            N'INSERT INTO dbo.BackupExecutionLog (DatabaseName, BackupType, BackupFile, StartTime, Status)
+              VALUES (@DBName, @BackupType, @BackupFile, @StartTime, ''RUNNING'');
+              SET @LogId = SCOPE_IDENTITY();',
+            N'@DBName SYSNAME, @BackupType NVARCHAR(20), @BackupFile NVARCHAR(500), @StartTime DATETIME, @LogId INT OUTPUT',
+            @DBName = @DBName, @BackupType = @LogBackupType, @BackupFile = @FileName,
+            @StartTime = @StartTime, @LogId = @LogId OUTPUT;
     END TRY
     BEGIN CATCH
         PRINT 'Avertissement : journalisation indisponible - ' + ERROR_MESSAGE();
@@ -223,14 +229,18 @@ BEGIN
         IF @LogId IS NOT NULL
         BEGIN
             BEGIN TRY
-                UPDATE dbo.BackupExecutionLog
-                SET EndTime          = @EndTime,
-                    DurationSeconds  = @Duration,
-                    Status           = 'SUCCESS',
-                    BackupSizeMB     = @BackupSizeMB,
-                    CompressedSizeMB = @CompressedSizeMB,
-                    PurgeInfo        = @PurgeInfo
-                WHERE Id = @LogId;
+                EXEC sp_executesql
+                    N'UPDATE dbo.BackupExecutionLog
+                      SET EndTime          = @EndTime,
+                          DurationSeconds  = @Duration,
+                          Status           = ''SUCCESS'',
+                          BackupSizeMB     = @BackupSizeMB,
+                          CompressedSizeMB = @CompressedSizeMB,
+                          PurgeInfo        = @PurgeInfo
+                      WHERE Id = @LogId;',
+                    N'@EndTime DATETIME, @Duration INT, @BackupSizeMB DECIMAL(18,2), @CompressedSizeMB DECIMAL(18,2), @PurgeInfo NVARCHAR(4000), @LogId INT',
+                    @EndTime = @EndTime, @Duration = @Duration, @BackupSizeMB = @BackupSizeMB,
+                    @CompressedSizeMB = @CompressedSizeMB, @PurgeInfo = @PurgeInfo, @LogId = @LogId;
             END TRY
             BEGIN CATCH
                 PRINT 'Avertissement : mise à jour du log impossible - ' + ERROR_MESSAGE();
@@ -251,13 +261,17 @@ BEGIN
         IF @LogId IS NOT NULL
         BEGIN
             BEGIN TRY
-                UPDATE dbo.BackupExecutionLog
-                SET EndTime         = @EndTime,
-                    DurationSeconds = @Duration,
-                    Status          = 'FAILED',
-                    ErrorNumber     = @ErrorNumber,
-                    ErrorMessage    = @ErrorMessage
-                WHERE Id = @LogId;
+                EXEC sp_executesql
+                    N'UPDATE dbo.BackupExecutionLog
+                      SET EndTime         = @EndTime,
+                          DurationSeconds = @Duration,
+                          Status          = ''FAILED'',
+                          ErrorNumber     = @ErrorNumber,
+                          ErrorMessage    = @ErrorMessage
+                      WHERE Id = @LogId;',
+                    N'@EndTime DATETIME, @Duration INT, @ErrorNumber INT, @ErrorMessage NVARCHAR(4000), @LogId INT',
+                    @EndTime = @EndTime, @Duration = @Duration, @ErrorNumber = @ErrorNumber,
+                    @ErrorMessage = @ErrorMessage, @LogId = @LogId;
             END TRY
             BEGIN CATCH
                 PRINT 'Avertissement : mise à jour du log impossible - ' + ERROR_MESSAGE();
