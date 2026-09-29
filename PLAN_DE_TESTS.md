@@ -33,20 +33,37 @@ Pour chaque test : suivre les étapes, comparer au résultat attendu, cocher la 
 | I2 | Ré-exécution | Exécuter `01_Log_Database.sql` une 2ᵉ fois | Aucune erreur, aucune donnée perdue | ☐ |
 | I3 | Mise à niveau d'une table existante | Sur une instance qui possède l'ancienne `BackupExecutionLog` (avec des lignes), exécuter `01_Log_Database.sql` | Colonnes `ServerName`, `BackupSizeMB`, `CompressedSizeMB`, `ErrorNumber`, `PurgeInfo` ajoutées ; `BackupType` fait au moins 20 caractères ; anciennes lignes intactes | ☐ |
 | I4 | Procédure | Exécuter `02_usp_BackupDatabase.sql` deux fois | Procédure créée puis remplacée sans erreur (`CREATE OR ALTER`) | ☐ |
-| I5 | Jobs | Renseigner `@OperatorEmail` / `@MailProfile` dans `03_Jobs_SQL_Agent.sql`, l'exécuter | Opérateur `DBA_ATLANTIS` créé, 3 jobs créés, message « Profil Database Mail associé » | ☐ |
+| I5 | Jobs | Renseigner `@OperatorEmail` / `@MailProfile` et les noms des bases Sage dans `03_Jobs_SQL_Agent.sql`, l'exécuter | Opérateur `DBA_ATLANTIS` créé, **8 jobs** créés (Atlantis FULL/DIFF/LOG, Sage compta FULL/DIFF/LOG, Sage paie FULL/DIFF), message « Profil Database Mail associé », commandes de lancement des 3 jobs FULL affichées | ☐ |
 | I6 | Ré-exécution des jobs | Exécuter `03_Jobs_SQL_Agent.sql` une 2ᵉ fois | Jobs supprimés puis recréés, pas de doublon dans `msdb.dbo.sysjobs` ni `msdb.dbo.sysschedules` | ☐ |
 | I7 | Profil mail absent | Exécuter `03` avec un `@MailProfile` inexistant | Avertissement « Profil Database Mail introuvable », jobs quand même créés | ☐ |
 | I8 | Redémarrage SQL Agent | Redémarrer le service SQL Server Agent | Propriétés de SQL Agent > Système d'alerte : profil Database Mail activé | ☐ |
+| I9 | Base introuvable | Laisser `<NOM_BASE_SAGE_PAIE>` non renseigné, exécuter `03` | Avertissement « Base "<NOM_BASE_SAGE_PAIE>" introuvable » pour les jobs FULL et DIFF de Sage paie ; les autres jobs sont créés normalement | ☐ |
+| I10 | Sage paie en mode FULL | Mettre la base Sage paie *de test* en mode FULL, exécuter `03` | Avertissement « … est en mode FULL sans sauvegarde LOG » | ☐ |
+| I11 | Job LOG sur base en SIMPLE | Mettre la base Sage compta *de test* en mode SIMPLE, exécuter `03`, la remettre en FULL | Avertissement « … est en mode SIMPLE alors qu'un job LOG est prévu » | ☐ |
 
 Vérification des plannings (I5) :
 ```sql
-SELECT j.name, s.freq_type, s.freq_interval, s.freq_subday_type, s.freq_subday_interval, s.active_start_time
+SELECT j.name, s.name AS planification, s.freq_type, s.freq_interval, s.freq_subday_type,
+       s.freq_subday_interval, s.active_start_time, s.active_end_time
 FROM msdb.dbo.sysjobs j
 JOIN msdb.dbo.sysjobschedules js ON js.job_id = j.job_id
 JOIN msdb.dbo.sysschedules s ON s.schedule_id = js.schedule_id
-WHERE j.name LIKE N'ATLANTIS - Sauvegarde%';
--- Attendu : FULL 8/1/1/0/10000, DIFF 8/126/1/0/10000, LOG 4/1/4/15/0
+WHERE j.name LIKE N'% - Sauvegarde %'
+ORDER BY j.name;
 ```
+
+| Job | freq_type / freq_interval | subday_type / interval | début → fin |
+|-----|---------------------------|------------------------|-------------|
+| ATLANTIS FULL | 8 / 64 (samedi) | 1 / 0 | 220000 |
+| ATLANTIS DIFF | 8 / 126 (lun-sam) | 1 / 0 | 200000 |
+| ATLANTIS LOG | 8 / 126 | 8 / 1 (toutes les heures) | 80000 → 190000 |
+| SAGE COMPTA FULL | 8 / 64 | 1 / 0 | 210000 |
+| SAGE COMPTA DIFF | 8 / 126 | 1 / 0 | 193000 |
+| SAGE COMPTA LOG | 8 / 126 | 8 / 1 | 80000 → 190000 |
+| SAGE PAIE FULL (2 planifications) | 16 / 20 et 16 / 27 (mensuel) | 1 / 0 | 200000 |
+| SAGE PAIE DIFF | 8 / 126 | 1 / 0 | 190000 |
+
+Contrôle visuel complémentaire : dans SSMS, colonne « Prochaine exécution » du moniteur d'activité des travaux, cohérente avec le tableau.
 
 ---
 
@@ -124,12 +141,14 @@ La purge s'appuie sur la date inscrite dans les fichiers de sauvegarde : on la t
 
 | ID | Test | Étapes | Résultat attendu | OK |
 |----|------|--------|------------------|----|
-| J1 | Exécution manuelle | `EXEC msdb.dbo.sp_start_job N'ATLANTIS - Sauvegarde FULL - BD_ATLANTIS_SGI';` puis DIFF puis LOG | Historique du job en succès ; ligne `SUCCESS` dans le log | ☐ |
+| J1 | Exécution manuelle | Pour chaque base : lancer le job FULL (commandes affichées par le script `03`), puis DIFF, puis LOG (Atlantis et Sage compta) | Les 8 jobs en succès ; une ligne `SUCCESS` par exécution ; fichiers dans le dossier de chaque base | ☐ |
 | J2 | Fichier de sortie | Ouvrir `C:\Backups\AtlantisBackup\JobLogs\BD_ATLANTIS_SGI_FULL.txt` | Contient la sortie complète (progression STATS, messages PRINT) | ☐ |
 | J3 | Alerte e-mail en cas d'échec | Mettre `BD_ATLANTIS_SGI` hors ligne *sur l'instance de test*, lancer le job LOG, remettre en ligne | Job en échec, **e-mail reçu** par l'opérateur, événement dans le journal d'applications Windows | ☐ |
 | J4 | Détail de l'erreur | Dans J3, consulter le fichier `JobLogs\..._LOG.txt` | Tous les messages d'erreur SQL Server y figurent (pas seulement le dernier) | ☐ |
-| J5 | Planification réelle | Laisser tourner 24 h | ~96 lignes LOG, 1 DIFF (ou 1 FULL le dimanche) dans `BackupExecutionLog`, aucune ligne restée `RUNNING` | ☐ |
-| J6 | Dimanche | Vérifier le lundi matin | FULL exécutée le dimanche à 01h00, pas de DIFF le dimanche | ☐ |
+| J5 | Journée de semaine | Le lendemain d'un jour entre lundi et vendredi, compter les lignes de la veille par base et par type | Atlantis et Sage compta : 12 LOG (08h00 à 19h00) et 1 DIFF chacune ; Sage paie : 1 DIFF ; aucune ligne restée `RUNNING` | ☐ |
+| J6 | Week-end | Vérifier le lundi matin | Samedi : DIFF puis FULL pour Atlantis (20h00 / 22h00) et Sage compta (19h30 / 21h00) ; dimanche : aucune sauvegarde | ☐ |
+| J7 | FULL mensuelle Sage paie | Vérifier le 21 et le 28 du mois | Une FULL Sage paie le 20 et le 27 à 20h00, en plus de la DIFF de 19h00 | ☐ |
+| J8 | Isolation des dossiers | Après J1 | Chaque base écrit uniquement dans son dossier (`AtlantisBackup`, `SageComptaBackup`, `SagePaieBackup`) et son `JobLogs\` | ☐ |
 
 ---
 
@@ -226,11 +245,11 @@ Chaque test doit remonter une erreur, afficher l'étape en échec et produire un
 | Section | Tests | OK | KO | Remarques |
 |---------|-------|----|----|-----------|
 | 0. Préparation | P1–P5 | | | |
-| 1. Installation | I1–I8 | | | |
+| 1. Installation | I1–I11 | | | |
 | 2. Sauvegardes nominales | S1–S7 | | | |
 | 3. Sauvegardes en erreur | E1–E10 | | | |
 | 4. Purge | R1–R6 | | | |
-| 5. Jobs et alertes | J1–J6 | | | |
+| 5. Jobs et alertes | J1–J8 | | | |
 | 6. Restauration | T1–T19 | | | |
 | 7. Supervision | M1–M2 | | | |
 | 8. Répétition générale | G1–G4 | | | |

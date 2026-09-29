@@ -5,3 +5,33 @@ DIFF (Atlantis & Sage compta) 15 jours 360 heures
 FULL hebdo(Atlantis & Sage compta) 23 jours 552 heures
 DIFF (Sage paie) 24 jours 600 heures
 FULL mensuelle (Sage paie) 32 jours 768 heures
+
+ les périodes idéales
+Pour SQL Server, on utilise généralement trois types de sauvegardes. La cartographie montre
+plusieurs traitements selon l’entité.
+Par exemple :
+• Les opérations boursières sont saisies quotidiennement
+• Sage Comptabilité est alimentée de façon quotidiennement
+• Sage Paie produit un fichier mensuel
+Type Atlantis SGI v2.9.0 Sage 100cloud Compta
+v7.01
+Sage Paie v10.0
+Sauvegarde complète
+(FULL)
+Tous les samedis à 22h00 Tous les samedis à 21h00 Tous les mois le 20 et le
+27 à 20H00.
+Sauvegarde
+différentielle
+Tous les soirs de lundi à
+samedi à 20h00.
+Tous les soirs de lundi à
+samedi à 19h30.
+Tous les soirs de lundi à
+samedi à 19h00.
+Sauvegarde du
+journal (LOG)
+Toutes les heures de lundi
+à samedi entre 08h00 et
+19h00
+Toutes les heures de lundi à
+samedi entre 08h00 et 19h00

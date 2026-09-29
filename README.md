@@ -1,6 +1,6 @@
 # ATLANTIS_SGI
 
-Scripts de sauvegarde et de restauration de la base SQL Server `BD_ATLANTIS_SGI`.
+Scripts de sauvegarde et de restauration des bases SQL Server Atlantis SGI (`BD_ATLANTIS_SGI`), Sage 100cloud Compta et Sage Paie.
 
 ## Arborescence
 
@@ -9,7 +9,7 @@ scripts/
 ├── installation/                  à exécuter une fois, dans l'ordre
 │   ├── 01_Log_Database.sql        base Log_Database + tables de journalisation
 │   ├── 02_usp_BackupDatabase.sql  procédure de sauvegarde FULL / DIFF / LOG
-│   └── 03_Jobs_SQL_Agent.sql      jobs planifiés + alertes e-mail
+│   └── 03_Jobs_SQL_Agent.sql      jobs planifiés des 3 bases + alertes e-mail
 ├── full_backup/                   sauvegarde FULL manuelle (appel de la procédure)
 ├── diff_backup/                   sauvegarde DIFF manuelle
 ├── log_backup/                    sauvegarde LOG manuelle
@@ -28,24 +28,30 @@ Avant toute mise en production, dérouler le plan de tests : [PLAN_DE_TESTS.md](
 
 1. Exécuter `scripts/installation/01_Log_Database.sql`. Si la table `BackupExecutionLog` existe déjà, les colonnes manquantes sont ajoutées sans perte de données.
 2. Exécuter `scripts/installation/02_usp_BackupDatabase.sql`.
-3. Dans `scripts/installation/03_Jobs_SQL_Agent.sql`, renseigner `@OperatorEmail` et `@MailProfile`, puis l'exécuter.
+3. Dans `scripts/installation/03_Jobs_SQL_Agent.sql` :
+   - renseigner `@OperatorEmail` et `@MailProfile` ;
+   - dans la table `@Bases`, remplacer `<NOM_BASE_SAGE_COMPTA>` et `<NOM_BASE_SAGE_PAIE>` par les noms réels des bases (`SELECT name FROM sys.databases;`). Une base introuvable est ignorée avec un avertissement ;
+   - exécuter le script.
 4. Redémarrer le service SQL Server Agent pour activer le profil Database Mail.
-5. Lancer une première fois le job FULL. Les jobs DIFF et LOG échouent tant qu'aucune FULL n'existe :
-   ```sql
-   EXEC msdb.dbo.sp_start_job @job_name = N'ATLANTIS - Sauvegarde FULL - BD_ATLANTIS_SGI';
-   ```
+5. Lancer une première fois le job FULL de chaque base : le script affiche les commandes à exécuter. Les jobs DIFF et LOG échouent tant qu'aucune FULL n'existe.
 
-Le compte de service SQL Server doit avoir les droits d'écriture sur `C:\Backups\AtlantisBackup\`.
+Le compte de service SQL Server doit avoir les droits d'écriture sur `C:\Backups\AtlantisBackup\`, `C:\Backups\SageComptaBackup\` et `C:\Backups\SagePaieBackup\`.
+
+Le script `03` signale aussi deux incohérences :
+- une base en mode FULL sans job LOG (Sage paie) : son journal de transactions grossirait indéfiniment ;
+- une base en mode SIMPLE avec un job LOG : ce job échouerait.
 
 ## Stratégie de sauvegarde
 
-| Type | Planification | Rétention | Dossier |
-|------|---------------|-----------|---------|
-| FULL | dimanche 01h00 | 552 h (23 jours) | `C:\Backups\AtlantisBackup\FULL\` |
-| DIFF | lundi à samedi 01h00 | 360 h (15 jours) | `C:\Backups\AtlantisBackup\DIFF\` |
-| LOG | toutes les 15 minutes | 168 h (7 jours) | `C:\Backups\AtlantisBackup\LOG\` |
+Plannings et rétentions issus du fichier `Politique de Retention.txt` :
 
-Les rétentions viennent du fichier `Politique de Retention.txt`.
+| Base | FULL | DIFF | LOG | Dossier |
+|------|------|------|-----|---------|
+| Atlantis SGI | samedi 22h00 — 552 h (23 j) | lundi à samedi 20h00 — 360 h (15 j) | toutes les heures, lundi à samedi 08h00-19h00 — 168 h (7 j) | `C:\Backups\AtlantisBackup\` |
+| Sage compta | samedi 21h00 — 552 h (23 j) | lundi à samedi 19h30 — 360 h (15 j) | toutes les heures, lundi à samedi 08h00-19h00 — 168 h (7 j) | `C:\Backups\SageComptaBackup\` |
+| Sage paie | le 20 et le 27 du mois à 20h00 — 768 h (32 j) | lundi à samedi 19h00 — 600 h (24 j) | aucune | `C:\Backups\SagePaieBackup\` |
+
+Chaque dossier contient les sous-dossiers `FULL\`, `DIFF\`, `LOG\` et `JobLogs\`. Les horaires sont décalés d'une base à l'autre pour ne pas saturer le disque.
 
 - **Nommage** : `<Base>_yyyyMMdd_HHmmss_<TYPE>.bak|.trn`. L'ordre alphabétique correspond à l'ordre chronologique.
 - **Contrôles** : chaque sauvegarde est faite avec `COMPRESSION` et `CHECKSUM`, puis vérifiée par `RESTORE VERIFYONLY WITH CHECKSUM`.
@@ -53,15 +59,17 @@ Les rétentions viennent du fichier `Politique de Retention.txt`.
   - Garde-fou : un fichier postérieur à la dernière FULL n'est jamais supprimé. Si les FULL échouent plusieurs jours, la chaîne de restauration reste complète.
   - Une sauvegarde `@CopyOnly = 1` ne déclenche pas de purge.
 - **Journalisation** : chaque exécution est enregistrée dans `Log_Database.dbo.BackupExecutionLog` (statut, durée, taille, erreur, purge).
-  - La sortie complète de chaque job est écrite dans `C:\Backups\AtlantisBackup\JobLogs\`. On y trouve tous les messages d'erreur SQL Server, y compris ceux qu'un `CATCH` T-SQL ne peut pas lire.
+  - La sortie complète de chaque job est écrite dans le sous-dossier `JobLogs\` de la base. On y trouve tous les messages d'erreur SQL Server, y compris ceux qu'un `CATCH` T-SQL ne peut pas lire.
 - **Alertes** : en cas d'échec d'un job, un e-mail est envoyé à l'opérateur `DBA_ATLANTIS` et l'événement est écrit dans le journal Windows.
 
 ### Objectifs de restauration
 
-- **RPO (perte de données maximale)** : environ 15 minutes, soit l'intervalle entre deux sauvegardes LOG.
-  - Si la base est endommagée mais que le serveur répond, la sauvegarde de fin de journal (tail-log) des scripts de restauration peut ramener cette perte à zéro.
+- **RPO (perte de données maximale)** :
+  - Atlantis et Sage compta : 1 heure en journée (lundi à samedi, 08h00-19h00), puis la DIFF du soir couvre la fin de journée. Les saisies faites après la DIFF du soir, la nuit ou le dimanche ne sont sauvegardées qu'à la prochaine sauvegarde (jusqu'à environ 34 h entre samedi soir et lundi 08h00).
+  - Sage paie : jusqu'à 24 h en semaine (DIFF quotidienne), 48 h entre samedi 19h00 et lundi 19h00.
+  - Si la base est endommagée mais que le serveur répond, la sauvegarde de fin de journal (tail-log) des scripts de restauration peut ramener cette perte à zéro pour Atlantis et Sage compta.
   - Si le disque des sauvegardes est perdu avec le serveur, le RPO n'est plus garanti : voir « Points restant à traiter ».
-- **Restauration à un instant précis** : possible sur les 6 derniers jours environ. Il faut les journaux produits depuis la DIFF précédant l'instant voulu, et les journaux sont conservés 7 jours.
+- **Restauration à un instant précis** : pour Atlantis et Sage compta uniquement, sur les 6 derniers jours environ, et seulement pendant les heures couvertes par les sauvegardes LOG. Il faut les journaux produits depuis la DIFF précédant l'instant voulu, et les journaux sont conservés 7 jours. Sage paie se restaure à l'état d'une DIFF.
 - **RTO (durée de remise en service)** : à mesurer lors des tests de restauration. La durée de chaque restauration est enregistrée dans `RestoreExecutionLog.DurationSeconds`.
 
 ## Restauration
@@ -69,7 +77,7 @@ Les rétentions viennent du fichier `Politique de Retention.txt`.
 | Situation | Script |
 |-----------|--------|
 | Revenir à la dernière FULL | `full_bd_restaure_script.sql` |
-| Revenir à la dernière nuit | `full_+_diff_restaure_script.sql` avec la FULL du dimanche et la DIFF de la nuit |
+| Revenir à la dernière DIFF du soir | `full_+_diff_restaure_script.sql` avec la dernière FULL et la DIFF voulue |
 | Revenir à un instant précis / au plus près de l'incident | `full_diff_log_restaure_script.sql` avec la FULL, la dernière DIFF avant l'instant voulu, puis les journaux dans l'ordre et `@StopAt` |
 | Copie rapide sur un poste de développement | `fast_restaure_db.sql` |
 
@@ -118,4 +126,5 @@ ORDER BY StartTime DESC;
 - **Copie hors serveur** : les sauvegardes restent sur `C:\` du serveur. Une copie vers un autre disque ou partage, idéalement hors site, est indispensable (règle 3-2-1).
 - **Chiffrement** des sauvegardes (`WITH ENCRYPTION`) si les données sont sensibles. Il faut alors sauvegarder le certificat séparément.
 - **Dossier `TAILLOG\`** : il n'est pas purgé automatiquement. Supprimer ses fichiers une fois la restauration validée.
-- **Bases Sage compta et Sage paie** : elles figurent dans la politique de rétention. La procédure `usp_BackupDatabase` peut les sauvegarder aussi : il suffit d'ajouter leurs jobs.
+- **Mode de récupération de Sage paie** : sans sauvegarde LOG prévue, la base doit être en mode SIMPLE (le script `03` le signale si ce n'est pas le cas).
+- **Scripts de restauration** : ils visent `BD_ATLANTIS_SGI` par défaut ; pour une base Sage, modifier `@DatabaseName` et les chemins des fichiers.
