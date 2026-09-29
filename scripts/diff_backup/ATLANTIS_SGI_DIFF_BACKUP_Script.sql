@@ -76,6 +76,30 @@ BEGIN TRY
 
     PRINT 'Début de la sauvegarde : ' + CONVERT(VARCHAR,@StartTime,120);
 
+    ----------------------------------------------------
+    -- Contrôles préalables
+    ----------------------------------------------------
+
+    IF DB_ID(@DBName) IS NULL
+    BEGIN
+        SET @ErrorMessage = 'La base ' + @DBName + ' n''existe pas.';
+        THROW 50001, @ErrorMessage, 1;
+    END;
+
+    -- Une différentielle exige une sauvegarde FULL de base
+    -- (differential_base_lsn est NULL tant qu'aucune FULL n'a été faite)
+    IF EXISTS (SELECT 1 FROM sys.master_files
+               WHERE database_id = DB_ID(@DBName)
+                 AND file_id = 1
+                 AND differential_base_lsn IS NULL)
+    BEGIN
+        SET @ErrorMessage = 'Aucune sauvegarde FULL de base pour ' + @DBName + ' : sauvegarde différentielle impossible.';
+        THROW 50002, @ErrorMessage, 1;
+    END;
+
+    -- Création du dossier de destination s'il n'existe pas
+    EXEC master.dbo.xp_create_subdir @BackupPath;
+
     BACKUP DATABASE @DBName
     TO DISK=@FileName
     WITH
@@ -90,7 +114,8 @@ BEGIN TRY
     ----------------------------------------------------
 
     RESTORE VERIFYONLY
-    FROM DISK=@FileName;
+    FROM DISK=@FileName
+    WITH CHECKSUM;
 
     ----------------------------------------------------
     -- Fin
@@ -131,7 +156,7 @@ BEGIN CATCH
 
     SET @Duration = DATEDIFF(SECOND,@StartTime,@EndTime);
 
-    SET @ErrorMessage = ERROR_MESSAGE();
+    SET @ErrorMessage = 'Erreur ' + CAST(ERROR_NUMBER() AS NVARCHAR(10)) + ' : ' + ERROR_MESSAGE();
 
     IF @LogId IS NOT NULL
     BEGIN

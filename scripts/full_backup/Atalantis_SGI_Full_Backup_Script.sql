@@ -10,7 +10,9 @@ DECLARE @Year NVARCHAR(4);
 DECLARE @Hour NVARCHAR(2);
 DECLARE @Minute NVARCHAR(2);
 DECLARE @Second NVARCHAR(2);
-DECLARE @BackupType NVARCHAR(20) = 'FULL';
+-- 1 = sauvegarde ponctuelle (COPY_ONLY) hors planning : ne casse pas la chaîne des différentielles
+DECLARE @CopyOnly BIT = 0;
+DECLARE @BackupType NVARCHAR(20) = CASE WHEN @CopyOnly = 1 THEN 'FULL_COPY_ONLY' ELSE 'FULL' END;
 
 DECLARE @StartTime DATETIME;
 DECLARE @EndTime DATETIME;
@@ -71,18 +73,39 @@ BEGIN TRY
 
     PRINT 'Début de la sauvegarde : ' + CONVERT(VARCHAR, @StartTime, 120);
 
+    -- Contrôle préalable : la base doit exister
+    IF DB_ID(@DBName) IS NULL
+    BEGIN
+        SET @ErrorMessage = 'La base ' + @DBName + ' n''existe pas.';
+        THROW 50001, @ErrorMessage, 1;
+    END;
 
-    BACKUP DATABASE @DBName
-    TO DISK = @FileName
-    WITH
-        INIT,
-        COMPRESSION,
-        CHECKSUM,
-        STATS = 10;
+    -- Création du dossier de destination s'il n'existe pas
+    EXEC master.dbo.xp_create_subdir @BackupPath;
+
+    IF @CopyOnly = 1
+        -- Sauvegarde ponctuelle : ne modifie pas la base des différentielles
+        BACKUP DATABASE @DBName
+        TO DISK = @FileName
+        WITH
+            COPY_ONLY,
+            INIT,
+            COMPRESSION,
+            CHECKSUM,
+            STATS = 10;
+    ELSE
+        BACKUP DATABASE @DBName
+        TO DISK = @FileName
+        WITH
+            INIT,
+            COMPRESSION,
+            CHECKSUM,
+            STATS = 10;
 
     -- Vérification de la sauvegarde
     RESTORE VERIFYONLY
-    FROM DISK = @FileName;
+    FROM DISK = @FileName
+    WITH CHECKSUM;
 
     SET @EndTime = GETDATE();
     SET @Duration = DATEDIFF(SECOND, @StartTime, @EndTime);
@@ -111,7 +134,7 @@ BEGIN CATCH
 
     SET @EndTime = GETDATE();
     SET @Duration = DATEDIFF(SECOND, @StartTime, @EndTime);
-    SET @ErrorMessage = ERROR_MESSAGE();
+    SET @ErrorMessage = 'Erreur ' + CAST(ERROR_NUMBER() AS NVARCHAR(10)) + ' : ' + ERROR_MESSAGE();
 
     IF @LogId IS NOT NULL
     BEGIN

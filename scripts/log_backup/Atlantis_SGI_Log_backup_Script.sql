@@ -76,16 +76,46 @@ BEGIN TRY
 
     PRINT 'Début de la sauvegarde : ' + CONVERT(VARCHAR,@StartTime,120);
 
+    ----------------------------------------------------
+    -- Contrôles préalables
+    ----------------------------------------------------
+
+    -- La sauvegarde du journal exige le mode de récupération FULL ou BULK_LOGGED
+    IF NOT EXISTS (SELECT 1 FROM sys.databases
+                   WHERE name = @DBName
+                     AND recovery_model_desc IN ('FULL','BULK_LOGGED'))
+    BEGIN
+        SET @ErrorMessage = 'La base ' + @DBName + ' n''existe pas ou n''est pas en mode de récupération FULL / BULK_LOGGED.';
+        THROW 50001, @ErrorMessage, 1;
+    END;
+
+    -- Une sauvegarde FULL doit avoir initialisé la chaîne des journaux
+    IF EXISTS (SELECT 1 FROM sys.database_recovery_status
+               WHERE database_id = DB_ID(@DBName)
+                 AND last_log_backup_lsn IS NULL)
+    BEGIN
+        SET @ErrorMessage = 'Aucune sauvegarde FULL n''a initialisé la chaîne des journaux de ' + @DBName + '.';
+        THROW 50002, @ErrorMessage, 1;
+    END;
+
+    -- Création du dossier de destination s'il n'existe pas
+    EXEC master.dbo.xp_create_subdir @BackupPath;
+
     BACKUP LOG @DBName
     TO DISK=@FileName
-    WITH COMPRESSION, INIT, STATS = 10;
+    WITH
+        INIT,
+        COMPRESSION,
+        CHECKSUM,
+        STATS=10;
 
     ----------------------------------------------------
     -- Vérification de la sauvegarde
     ----------------------------------------------------
 
     RESTORE VERIFYONLY
-    FROM DISK=@FileName;
+    FROM DISK=@FileName
+    WITH CHECKSUM;
 
     ----------------------------------------------------
     -- Fin
@@ -126,7 +156,7 @@ BEGIN CATCH
 
     SET @Duration = DATEDIFF(SECOND,@StartTime,@EndTime);
 
-    SET @ErrorMessage = ERROR_MESSAGE();
+    SET @ErrorMessage = 'Erreur ' + CAST(ERROR_NUMBER() AS NVARCHAR(10)) + ' : ' + ERROR_MESSAGE();
 
     IF @LogId IS NOT NULL
     BEGIN
