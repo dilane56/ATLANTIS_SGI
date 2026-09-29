@@ -22,6 +22,8 @@ scripts/
 
 Prérequis : SQL Server 2017 ou supérieur, SQL Server Agent démarré, Database Mail configuré.
 
+Avant toute mise en production, dérouler le plan de tests : [PLAN_DE_TESTS.md](PLAN_DE_TESTS.md).
+
 ## Installation
 
 1. Exécuter `scripts/installation/01_Log_Database.sql`. Si la table `BackupExecutionLog` existe déjà, les colonnes manquantes sont ajoutées sans perte de données.
